@@ -1,9 +1,8 @@
-import path from 'path';
 import dotenv from 'dotenv';
 import { z } from 'zod';
 
-// Load from Server/.env — works regardless of where the process is started
-dotenv.config({ path: path.resolve(__dirname, '../../.env') });
+// Load .env in development; Vercel injects env vars directly in production
+dotenv.config();
 
 const envSchema = z.object({
   PORT: z.string().default('5000'),
