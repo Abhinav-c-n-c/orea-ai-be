@@ -4,7 +4,7 @@ import Message, { getConversationId } from '../models/Message';
 import User from '../models/User';
 import { AuthRequest } from '../middlewares/authMiddleware';
 import { ApiResponse } from '../utils/ApiResponse';
-import { getIO } from '../sockets/socketHandler';
+import { getWsConnection } from '../sockets/wsHandler';
 
 // Send a message via HTTP (reliable fallback when socket is unavailable)
 export const sendMessage = async (
@@ -38,15 +38,15 @@ export const sendMessage = async (
       .populate('receiver', 'name email avatar')
       .lean();
 
-    // Try to notify via socket if available (best-effort, won't fail if not connected)
+    // Notify via WebSocket if receiver/sender are connected
     try {
-      const io = getIO();
-      if (io) {
-        io.to(receiverId).emit('message:received', populated);
-        io.to(senderId).emit('message:sent', populated);
-      }
+      const sendJson = (ws: ReturnType<typeof getWsConnection>, type: string, data: unknown) => {
+        if (ws && ws.readyState === 1) ws.send(JSON.stringify({ type, data }));
+      };
+      sendJson(getWsConnection(receiverId), 'message:received', populated);
+      sendJson(getWsConnection(senderId), 'message:sent', populated);
     } catch {
-      // Socket not available - that's fine, message is saved to DB
+      // WebSocket not available - message is saved to DB, that's fine
     }
 
     ApiResponse.created(res, populated);
