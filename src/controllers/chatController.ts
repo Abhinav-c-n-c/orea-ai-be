@@ -4,6 +4,57 @@ import Message, { getConversationId } from '../models/Message';
 import User from '../models/User';
 import { AuthRequest } from '../middlewares/authMiddleware';
 import { ApiResponse } from '../utils/ApiResponse';
+import { getIO } from '../sockets/socketHandler';
+
+// Send a message via HTTP (reliable fallback when socket is unavailable)
+export const sendMessage = async (
+  req: Request,
+  res: Response,
+  next: NextFunction
+): Promise<void> => {
+  try {
+    const senderId = (req as AuthRequest).userId!;
+    const { receiverId, content, messageType = 'text', mediaUrl, encrypted = false } = req.body;
+
+    if (!receiverId || !content) {
+      res.status(400).json({ success: false, message: 'receiverId and content are required' });
+      return;
+    }
+
+    const conversationId = getConversationId(senderId, receiverId);
+
+    const message = await Message.create({
+      sender: senderId,
+      receiver: receiverId,
+      conversationId,
+      content,
+      messageType,
+      mediaUrl,
+      encrypted,
+    });
+
+    const populated = await Message.findById(message._id)
+      .populate('sender', 'name email avatar')
+      .populate('receiver', 'name email avatar')
+      .lean();
+
+    // Try to notify via socket if available (best-effort, won't fail if not connected)
+    try {
+      const io = getIO();
+      if (io) {
+        io.to(receiverId).emit('message:received', populated);
+        io.to(senderId).emit('message:sent', populated);
+      }
+    } catch {
+      // Socket not available - that's fine, message is saved to DB
+    }
+
+    ApiResponse.created(res, populated);
+  } catch (error) {
+    next(error);
+  }
+};
+
 
 // Get conversations list
 export const getConversations = async (
