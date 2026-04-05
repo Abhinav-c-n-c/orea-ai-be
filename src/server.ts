@@ -27,7 +27,9 @@ const startServer = async () => {
     });
   } catch (error) {
     console.error('❌ Failed to start server:', error);
-    process.exit(1);
+    if (env.NODE_ENV !== 'production') {
+      process.exit(1);
+    }
   }
 };
 

@@ -21,7 +21,12 @@ export const getIO = (): Server => io;
 export const setupSocketServer = (server: HttpServer): void => {
   io = new Server(server, {
     cors: {
-      origin: ['http://localhost:3000', 'http://localhost:3800', 'http://localhost:3001'],
+      origin: [
+        'http://localhost:3000',
+        'http://localhost:3800',
+        'http://localhost:3001',
+        /\.vercel\.app$/,
+      ],
       credentials: true,
     },
     pingTimeout: 60000,
