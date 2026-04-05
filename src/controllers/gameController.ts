@@ -1,5 +1,5 @@
 import { Request, Response } from 'express';
-import { v4 as uuidv4 } from 'uuid';
+import { randomUUID } from 'crypto';
 import { GameRoom } from '../models/GameRoom';
 import { AuthRequest } from '../middlewares/authMiddleware';
 
@@ -18,7 +18,7 @@ export const createRoom = async (req: Request, res: Response) => {
       return res.status(400).json({ success: false, message: 'Invalid game type' });
     }
 
-    const roomId = uuidv4().substring(0, 8); // Short room ID
+    const roomId = randomUUID().substring(0, 8); // Short room ID
     const hostId = (req as AuthRequest).userId;
     const newRoom = new GameRoom({
       roomId,
