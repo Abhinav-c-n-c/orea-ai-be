@@ -10,8 +10,8 @@ const server = http.createServer(app);
 // Setup raw WebSocket server (replaces Socket.IO)
 setupWsServer(server);
 
-const PORT = parseInt(env.PORT, 10);
-
+// const PORT = parseInt(env.PORT, 10);
+const PORT = parseInt(process.env.PORT || env.PORT, 10);
 const startServer = async () => {
   try {
     await connectDB();

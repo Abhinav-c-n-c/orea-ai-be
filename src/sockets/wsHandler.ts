@@ -29,10 +29,10 @@ interface WsMessage {
 }
 
 // ── In-process connection map ─────────────────────────────────────────────────
-// Single-server map of userId → socket (works perfectly on Vercel's long-lived process)
-const connections = new Map<string, AuthenticatedSocket>();
+// Single-server map of userId → Set of sockets (supports multiple tabs/browsers)
+const connections = new Map<string, Set<AuthenticatedSocket>>();
 
-export const getWsConnection = (userId: string): AuthenticatedSocket | undefined =>
+export const getUserConnections = (userId: string): Set<AuthenticatedSocket> | undefined =>
   connections.get(userId);
 
 // ── Helper: send JSON to a socket ─────────────────────────────────────────────
@@ -43,9 +43,13 @@ const send = (ws: WebSocket, type: string, data?: unknown): void => {
 };
 
 // ── Helper: send to a specific user ──────────────────────────────────────────
-const sendToUser = (userId: string, type: string, data?: unknown): void => {
-  const ws = connections.get(userId);
-  if (ws) send(ws, type, data);
+export const sendToUser = (userId: string, type: string, data?: unknown): void => {
+  const userSockets = connections.get(userId);
+  if (userSockets) {
+    for (const ws of userSockets) {
+      send(ws, type, data);
+    }
+  }
 };
 
 // ── Helper: broadcast to room ─────────────────────────────────────────────────
@@ -65,14 +69,19 @@ export const setupWsServer = (server: HttpServer): WebSocketServer => {
 
   // ── Heartbeat: ping all clients every 25s, drop dead ones ─────────────────
   const heartbeatInterval = setInterval(() => {
-    for (const [userId, ws] of connections.entries()) {
-      if (!ws.isAlive) {
-        connections.delete(userId);
-        ws.terminate();
-        return;
+    for (const [userId, userSockets] of connections.entries()) {
+      for (const ws of userSockets) {
+        if (!ws.isAlive) {
+          userSockets.delete(ws);
+          ws.terminate();
+          if (userSockets.size === 0) {
+            connections.delete(userId);
+          }
+          continue;
+        }
+        ws.isAlive = false;
+        ws.ping();
       }
-      ws.isAlive = false;
-      ws.ping();
     }
   }, 25000);
 
@@ -116,13 +125,12 @@ export const setupWsServer = (server: HttpServer): WebSocketServer => {
 
           if (authTimeout) { clearTimeout(authTimeout); authTimeout = null; }
 
-          // Replace any existing connection for this user
-          const existing = connections.get(decoded.userId);
-          if (existing && existing !== ws) {
-            send(existing, 'auth:replaced', { message: 'Connected from another tab' });
-            existing.terminate();
+          let userSockets = connections.get(decoded.userId);
+          if (!userSockets) {
+            userSockets = new Set();
+            connections.set(decoded.userId, userSockets);
           }
-          connections.set(decoded.userId, ws);
+          userSockets.add(ws);
 
           // Update Redis presence
           await addOnlineUser(decoded.userId);
@@ -132,8 +140,8 @@ export const setupWsServer = (server: HttpServer): WebSocketServer => {
 
           // Broadcast online status to all connected users
           const onlinePayload = { userId: decoded.userId, onlineUsers: onlineIds.map(id => ({ userId: id })) };
-          for (const [, sock] of connections) {
-            send(sock, 'user:online', onlinePayload);
+          for (const [, socks] of connections) {
+            for (const sock of socks) send(sock, 'user:online', onlinePayload);
           }
         } catch (err) {
           console.error('Auth or Redis error:', err);
@@ -175,16 +183,16 @@ export const setupWsServer = (server: HttpServer): WebSocketServer => {
             .populate('receiver', 'name email avatar')
             .lean();
 
-          // Confirm to sender
-          send(ws, 'message:sent', populated);
+          // Confirm to sender (notify all sender's tabs)
+          sendToUser(userId, 'message:sent', populated);
 
-          // Deliver to receiver
-          const receiverWs = connections.get(receiverId);
-          if (receiverWs) {
-            send(receiverWs, 'message:received', populated);
+          // Deliver to receiver (notify all receiver's tabs)
+          const receiverSockets = connections.get(receiverId);
+          if (receiverSockets && receiverSockets.size > 0) {
+            sendToUser(receiverId, 'message:received', populated);
             // Auto mark delivered
             await Message.findByIdAndUpdate(message._id, { delivered: true, deliveredAt: new Date() });
-            send(receiverWs, 'message:delivered', { messageId: message._id, conversationId });
+            sendToUser(userId, 'message:delivered', { messageId: message._id, conversationId });
           }
         } catch (err) {
           send(ws, 'message:error', { error: 'Failed to send message' });
@@ -307,22 +315,26 @@ export const setupWsServer = (server: HttpServer): WebSocketServer => {
         if (!ws.userId) return;
         const userId = ws.userId;
 
-        // Only remove if this is the active connection (not a replaced one)
-        if (connections.get(userId) === ws) {
-          connections.delete(userId);
-          await removeOnlineUser(userId);
+        const userSockets = connections.get(userId);
+        if (userSockets) {
+          userSockets.delete(ws);
+          
+          if (userSockets.size === 0) {
+            connections.delete(userId);
+            await removeOnlineUser(userId);
 
-          // Leave all game rooms
-          if (ws.joinedRooms) {
-            for (const roomId of ws.joinedRooms) {
-              await removeUserFromRoom(roomId, userId);
+            const onlineIds = await getOnlineUserIds();
+            const offlinePayload = { userId, onlineUsers: onlineIds.map(id => ({ userId: id })) };
+            for (const [, socks] of connections) {
+              for (const sock of socks) send(sock, 'user:offline', offlinePayload);
             }
           }
+        }
 
-          const onlineIds = await getOnlineUserIds();
-          const offlinePayload = { userId, onlineUsers: onlineIds.map(id => ({ userId: id })) };
-          for (const [, sock] of connections) {
-            send(sock, 'user:offline', offlinePayload);
+        // Leave all game rooms
+        if (ws.joinedRooms) {
+          for (const roomId of ws.joinedRooms) {
+            await removeUserFromRoom(roomId, userId);
           }
         }
       } catch (err) {
