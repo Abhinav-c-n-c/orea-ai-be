@@ -18,7 +18,7 @@ export const createRoom = async (req: Request, res: Response) => {
       return res.status(400).json({ success: false, message: 'Invalid game type' });
     }
 
-    const roomId = randomUUID().substring(0, 8); // Short room ID
+    const roomId = randomUUID().substring(0, 8).toUpperCase(); // Short room ID in UPPERCASE
     const hostId = (req as AuthRequest).userId;
     const newRoom = new GameRoom({
       roomId,
@@ -40,7 +40,7 @@ export const createRoom = async (req: Request, res: Response) => {
 
 export const getRoom = async (req: Request, res: Response) => {
   try {
-    const { roomId } = req.params;
+    const roomId = req.params.roomId.toUpperCase();
     const room = await GameRoom.findOne({ roomId }).populate('players.user', 'name email avatar').populate('winner', 'name').populate('currentTurn', 'name');
 
     if (!room) {
@@ -58,7 +58,7 @@ export const getRoom = async (req: Request, res: Response) => {
 
 export const joinRoom = async (req: Request, res: Response) => {
   try {
-    const { roomId } = req.params;
+    const roomId = req.params.roomId.toUpperCase();
     const room = await GameRoom.findOne({ roomId });
 
     if (!room) {
