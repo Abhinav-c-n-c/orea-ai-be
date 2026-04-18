@@ -183,19 +183,36 @@ export const updateProfile = async (
 ): Promise<void> => {
   try {
     const userId = (req as AuthRequest).userId;
-    const { name, avatar } = req.body;
+    const { name, avatar, currentPassword, newPassword } = req.body;
 
-    const user = await User.findByIdAndUpdate(
-      userId,
-      { name, avatar },
-      { new: true, runValidators: true }
-    ).lean();
-
+    const user = await User.findById(userId);
     if (!user) {
       throw new AppError('User not found', 404);
     }
 
-    ApiResponse.success(res, user, 'Profile updated successfully');
+    // Handle Password Update
+    if (newPassword) {
+      if (!currentPassword) {
+        throw new AppError('Current password is required to set a new password', 400);
+      }
+      const isMatch = await user.comparePassword(currentPassword);
+      if (!isMatch) {
+        throw new AppError('Incorrect current password', 400);
+      }
+      user.password = newPassword;
+    }
+
+    // Handle Profile Info Update
+    if (name) user.name = name;
+    if (avatar) user.avatar = avatar;
+
+    await user.save();
+
+    // Remove password from response
+    const userObj = user.toObject();
+    delete (userObj as any).password;
+
+    ApiResponse.success(res, userObj, 'Profile updated successfully');
   } catch (error) {
     next(error);
   }
